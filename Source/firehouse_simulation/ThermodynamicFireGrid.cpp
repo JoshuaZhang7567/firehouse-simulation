@@ -58,39 +58,52 @@ void AThermodynamicFireGrid::Tick(float DeltaTime) {
 
           // --- NEW: SPAWN CHAR DECAL ---
           if (Cell.CharDecalComponent == nullptr && CharDecalMaterial != nullptr) {
+          
+            // Dynamically calculate the decal width/length to be 80% of the cell size
+            float DecalExtent = (CellSize / 2.0f) * 0.8f;
+
             Cell.CharDecalComponent = UGameplayStatics::SpawnDecalAtLocation(
                 GetWorld(),
                 CharDecalMaterial,
-                // X is the projection depth. 500 means it covers 1000 vertical units! Y and Z keep it locked to your 50x50 cell.
-                FVector(500.0f, 50.0f, 50.0f),
-                // Spawn it 400 units in the air so it casts the texture straight down over the furniture
+                FVector(500.0f, DecalExtent, DecalExtent), // Now it scales automatically!
                 Cell.Location + FVector(0.0f, 0.0f, 400.0f),
-                FRotator(-90.0f, 0.0f, 0.0f), // Point it straight down at the furniture
+                FRotator(-90.0f, 0.0f, 0.0f),
                 0.0f
             );
+          
+            Cell.DecalMaterialInstance = Cell.CharDecalComponent->CreateDynamicMaterialInstance();
           }
       } else {
-          // If it is no longer on fire (burned out), but still has particles running, destroy them!
-          if (Cell.FireEffectComponent != nullptr) {
-              Cell.FireEffectComponent->DestroyComponent();
-              Cell.FireEffectComponent = nullptr;
-          }
-      }
+                  // If it is no longer on fire (burned out), but still has particles running, destroy them!
+              if (Cell.FireEffectComponent != nullptr) {
+                  Cell.FireEffectComponent->DestroyComponent();
+                  Cell.FireEffectComponent = nullptr;
+              }
+            }
 
-      // --- DRAW DEBUG SHAPES ---
-      if (bShouldDraw) {
-          DrawDebugBox(GetWorld(), Cell.Location + FVector(0.0f, 0.0f, 5.0f),
-                       FVector(CellSize * 0.48f, CellSize * 0.48f, 5.0f),
-                       BoxColor, false, -1.0f, 0, 1.5f);
+            // --- NEW: UPDATE DECAL INTENSITY ---
+            if (Cell.DecalMaterialInstance != nullptr) {
+                // Map the temperature (150 to 500) to a 0.0 to 1.0 percentage
+                float FadePercentage = FMath::Clamp((Cell.Temperature - 150.0f) / (350.0f), 0.0f, 1.0f);
+                  
+                // Send that percentage directly into the Material graph!
+                Cell.DecalMaterialInstance->SetScalarParameterValue(TEXT("BurnIntensity"), FadePercentage);
+            }
 
-          FString IndexText = FString::FromInt(CurrentIndex);
-          FVector TextLocation = Cell.Location + FVector(0.0f, 0.0f, 15.0f);
-          
-          DrawDebugString(GetWorld(), TextLocation, IndexText, nullptr, BoxColor, 0.0f, true, 1.2f);
-      }
-    }
-  }
-}
+            // --- DRAW DEBUG SHAPES ---
+            if (bShouldDraw) {
+                DrawDebugBox(GetWorld(), Cell.Location + FVector(0.0f, 0.0f, 5.0f),
+                             FVector(CellSize * 0.48f, CellSize * 0.48f, 5.0f),
+                             BoxColor, false, -1.0f, 0, 1.5f);
+
+                FString IndexText = FString::FromInt(CurrentIndex);
+                FVector TextLocation = Cell.Location + FVector(0.0f, 0.0f, 15.0f);
+                
+                DrawDebugString(GetWorld(), TextLocation, IndexText, nullptr, BoxColor, 0.0f, true, 1.2f);
+            }
+          } // End of X loop
+        } // End of Y loop
+      } // End of Tick function
 
 void AThermodynamicFireGrid::InitializeGrid() {
   GridCells.Empty();

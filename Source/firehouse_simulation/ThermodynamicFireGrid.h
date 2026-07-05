@@ -31,9 +31,14 @@ struct FFireCell {
   UPROPERTY()
   UDecalComponent* CharDecalComponent;
 
+  // --- NEW: Store the dynamic material ---
+  UPROPERTY()
+  UMaterialInstanceDynamic* DecalMaterialInstance;
+
+  // Don't forget to add it to the constructor to prevent the nullptr trap!
   FFireCell()
       : Location(FVector::ZeroVector), Temperature(20.0f), Fuel(0.0f), BurnRate(0.0f),
-        bIsOnFire(false), FireEffectComponent(nullptr) {}
+        bIsOnFire(false), FireEffectComponent(nullptr), CharDecalComponent(nullptr), DecalMaterialInstance(nullptr) {}
 };
 
 UCLASS(Blueprintable, BlueprintType)
