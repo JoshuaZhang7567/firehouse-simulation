@@ -15,6 +15,12 @@ AThermodynamicFireGrid::AThermodynamicFireGrid() {
   GridWidth = 10;
   GridHeight = 10;
   CellSize = 100.0f;
+  NumEnvelopLayers = 3;
+  EnvelopFireScale = 1.0f;
+  ConductionCoefficient = 0.01f;
+  RadiativeCoefficient = 0.06f;
+  BurnTemperatureRamp = 150.0f;
+  FireTimeScale = 0.5f;
 }
 
 void AThermodynamicFireGrid::BeginPlay() {
@@ -45,8 +51,9 @@ void AThermodynamicFireGrid::Tick(float DeltaTime) {
           bShouldDraw = true;
       }
 
-      // --- NEW: SPAWN OR DESTROY PARTICLES ---
+      // --- SPAWN OR DESTROY PARTICLES ---
       if (Cell.bIsOnFire) {
+          // Ground-level fire particle
           if (Cell.FireEffectComponent == nullptr && FireParticleSystem != nullptr) {
               Cell.FireEffectComponent = UNiagaraFunctionLibrary::SpawnSystemAtLocation(
                   GetWorld(),
@@ -56,11 +63,56 @@ void AThermodynamicFireGrid::Tick(float DeltaTime) {
               );
           }
 
-          // --- NEW: SPAWN CHAR DECAL ---
+          // --- ENVELOPING FIRE: Spawn layered fire components attached to furniture ---
+          if (Cell.EnvelopFireComponents.Num() == 0 && Cell.FurnitureActor != nullptr && FireParticleSystem != nullptr) {
+              float Height = FMath::Max(Cell.FurnitureHeight, 50.0f);
+              for (int32 Layer = 0; Layer < NumEnvelopLayers; ++Layer) {
+                  // Evenly distribute layers from the base to the top of the furniture
+                  float ZOffset = (Height / (float)NumEnvelopLayers) * (Layer + 0.5f);
+                  FVector SpawnOffset = FVector(0.0f, 0.0f, ZOffset);
+
+                  UNiagaraComponent* EnvelopComp = UNiagaraFunctionLibrary::SpawnSystemAttached(
+                      FireParticleSystem,
+                      Cell.FurnitureActor->GetRootComponent(),
+                      NAME_None,
+                      SpawnOffset,
+                      FRotator::ZeroRotator,
+                      EAttachLocation::KeepRelativeOffset,
+                      true  // bAutoDestroy
+                  );
+
+                  if (EnvelopComp) {
+                      // Scale down upper layers initially — they'll intensify as temperature climbs
+                      float LayerScale = EnvelopFireScale * (0.4f + 0.6f * ((float)(Layer + 1) / (float)NumEnvelopLayers));
+                      EnvelopComp->SetWorldScale3D(FVector(LayerScale));
+
+                      // Set initial FireIntensity to 0 so it fades in with temperature
+                      EnvelopComp->SetFloatParameter(TEXT("FireIntensity"), 0.0f);
+
+                      Cell.EnvelopFireComponents.Add(EnvelopComp);
+                  }
+              }
+          }
+
+          // --- ENVELOPING FIRE: Update FireIntensity each frame based on temperature ---
+          if (Cell.EnvelopFireComponents.Num() > 0) {
+              // Map temperature (150–800) to intensity (0.0–1.0)
+              float BaseIntensity = FMath::Clamp((Cell.Temperature - 150.0f) / 650.0f, 0.0f, 1.0f);
+              for (int32 Layer = 0; Layer < Cell.EnvelopFireComponents.Num(); ++Layer) {
+                  if (Cell.EnvelopFireComponents[Layer] != nullptr) {
+                      // Lower layers reach full intensity sooner; upper layers lag behind
+                      float LayerFraction = (float)(Layer + 1) / (float)Cell.EnvelopFireComponents.Num();
+                      float LayerIntensity = FMath::Clamp(BaseIntensity / LayerFraction, 0.0f, 1.0f);
+                      Cell.EnvelopFireComponents[Layer]->SetFloatParameter(TEXT("FireIntensity"), LayerIntensity);
+                  }
+              }
+          }
+
+          // --- SPAWN CHAR DECAL ---
           if (Cell.CharDecalComponent == nullptr && CharDecalMaterial != nullptr) {
           
-            // Dynamically calculate the decal width/length to be 80% of the cell size
-            float DecalExtent = (CellSize / 2.0f) * 0.8f;
+            // Dynamically calculate the decal width/length to slightly exceed the cell size for seamless coverage
+            float DecalExtent = (CellSize / 2.0f) * 1.05f;
 
             Cell.CharDecalComponent = UGameplayStatics::SpawnDecalAtLocation(
                 GetWorld(),
@@ -74,12 +126,20 @@ void AThermodynamicFireGrid::Tick(float DeltaTime) {
             Cell.DecalMaterialInstance = Cell.CharDecalComponent->CreateDynamicMaterialInstance();
           }
       } else {
-                  // If it is no longer on fire (burned out), but still has particles running, destroy them!
-              if (Cell.FireEffectComponent != nullptr) {
-                  Cell.FireEffectComponent->DestroyComponent();
-                  Cell.FireEffectComponent = nullptr;
+          // If it is no longer on fire (burned out), but still has particles running, destroy them!
+          if (Cell.FireEffectComponent != nullptr) {
+              Cell.FireEffectComponent->DestroyComponent();
+              Cell.FireEffectComponent = nullptr;
+          }
+
+          // --- ENVELOPING FIRE: Destroy all enveloping fire components ---
+          for (UNiagaraComponent* EnvelopComp : Cell.EnvelopFireComponents) {
+              if (EnvelopComp != nullptr) {
+                  EnvelopComp->DestroyComponent();
               }
-            }
+          }
+          Cell.EnvelopFireComponents.Empty();
+      }
 
             // --- NEW: UPDATE DECAL INTENSITY ---
             if (Cell.DecalMaterialInstance != nullptr) {
@@ -145,6 +205,14 @@ void AThermodynamicFireGrid::InitializeGrid() {
                     NewCell.Fuel = 200.0f;
                     NewCell.BurnRate = 1.0f;
                 }
+
+                // --- ENVELOPING FIRE: Store the furniture actor and compute its height ---
+                if (NewCell.Fuel > 0.0f) {
+                    NewCell.FurnitureActor = HitActor;
+                    FVector Origin, BoxExtent;
+                    HitActor->GetActorBounds(false, Origin, BoxExtent);
+                    NewCell.FurnitureHeight = BoxExtent.Z * 2.0f;
+                }
             }
           }
       }
@@ -181,6 +249,7 @@ void AThermodynamicFireGrid::TriggerIgnitionAtLocation(FVector WorldLocation, fl
 }
 
 void AThermodynamicFireGrid::PropagateHeat(float DeltaTime) {
+  DeltaTime *= FireTimeScale;
   TArray<FFireCell> NextGridCells = GridCells;
 
   for (int32 Y = 0; Y < GridHeight; ++Y) {
@@ -191,12 +260,13 @@ void AThermodynamicFireGrid::PropagateHeat(float DeltaTime) {
       if (GridCells[CurrentIndex].Fuel <= 0.0f && GridCells[CurrentIndex].Temperature <= 20.1f)
         continue;
 
-      // --- NEW RADIATIVE HEAT LOGIC ---
-      float HeatGained = 0.0f;
+      // --- RADIATIVE HEAT LOGIC ---
+      float ConductionHeat = 0.0f;
+      float MaxRadiativeHeat = 0.0f;
 
-      // Check a 5x5 grid around the cell
-      for (int32 dy = -2; dy <= 2; ++dy) {
-        for (int32 dx = -2; dx <= 2; ++dx) {
+      // Check a 9x9 grid around the cell (±4 tiles) for heat radiation
+      for (int32 dy = -4; dy <= 4; ++dy) {
+        for (int32 dx = -4; dx <= 4; ++dx) {
           if (dx == 0 && dy == 0) continue; // Skip self
 
           int32 NeighborIndex = GetIndex(X + dx, Y + dy);
@@ -204,22 +274,36 @@ void AThermodynamicFireGrid::PropagateHeat(float DeltaTime) {
             
             // Only absorb heat if the neighbor is HOTTER than this cell
             if (GridCells[NeighborIndex].Temperature > GridCells[CurrentIndex].Temperature) {
-                float Distance = FMath::Sqrt((float)(dx * dx + dy * dy));
-                float Weight = 1.0f / Distance;
+                float DistSq = (float)(dx * dx + dy * dy);
+                float Distance = FMath::Sqrt(DistSq);
                 
-                // Accumulate heat based on the temperature difference
-                HeatGained += (GridCells[NeighborIndex].Temperature - GridCells[CurrentIndex].Temperature) * Weight * 0.01f * DeltaTime;
+                // Base conduction: inverse-distance falloff (summed from all neighbors)
+                float ConductionWeight = 1.0f / Distance;
+                ConductionHeat += (GridCells[NeighborIndex].Temperature - GridCells[CurrentIndex].Temperature) * ConductionWeight * ConductionCoefficient * DeltaTime;
+                
+                // Radiative boost: only keep the STRONGEST source (prevents additive snowball)
+                if (GridCells[NeighborIndex].bIsOnFire) {
+                    float RadiativeWeight = 1.0f / DistSq;
+                    float RadiativeHeat = GridCells[NeighborIndex].Temperature * RadiativeWeight * RadiativeCoefficient * DeltaTime;
+                    MaxRadiativeHeat = FMath::Max(MaxRadiativeHeat, RadiativeHeat);
+                }
             }
           }
         }
       }
 
+      // Combine: conduction stacks naturally, radiation uses only the dominant source
+      float HeatGained = ConductionHeat + MaxRadiativeHeat;
+
+      // Cap heat gained per frame to prevent exponential snowball spread
+      HeatGained = FMath::Min(HeatGained, 50.0f * DeltaTime);
+
       // Apply the accumulated heat directly
       NextGridCells[CurrentIndex].Temperature += HeatGained;
-      // --- END NEW RADIATIVE HEAT LOGIC ---
+      // --- END RADIATIVE HEAT LOGIC ---
 
       if (GridCells[CurrentIndex].bIsOnFire) {
-        NextGridCells[CurrentIndex].Temperature += 250.0f * DeltaTime;
+        NextGridCells[CurrentIndex].Temperature += BurnTemperatureRamp * DeltaTime;
         if (NextGridCells[CurrentIndex].Temperature > 800.0f) {
           NextGridCells[CurrentIndex].Temperature = 800.0f;
         }

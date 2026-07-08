@@ -35,10 +35,23 @@ struct FFireCell {
   UPROPERTY()
   UMaterialInstanceDynamic* DecalMaterialInstance;
 
+  // --- Enveloping fire: reference to the furniture actor this cell overlaps ---
+  UPROPERTY()
+  AActor* FurnitureActor;
+
+  // --- Enveloping fire: Niagara components attached at different heights ---
+  UPROPERTY()
+  TArray<UNiagaraComponent*> EnvelopFireComponents;
+
+  // --- Enveloping fire: cached bounding box height of the furniture ---
+  UPROPERTY()
+  float FurnitureHeight;
+
   // Don't forget to add it to the constructor to prevent the nullptr trap!
   FFireCell()
       : Location(FVector::ZeroVector), Temperature(20.0f), Fuel(0.0f), BurnRate(0.0f),
-        bIsOnFire(false), FireEffectComponent(nullptr), CharDecalComponent(nullptr), DecalMaterialInstance(nullptr) {}
+        bIsOnFire(false), FireEffectComponent(nullptr), CharDecalComponent(nullptr),
+        DecalMaterialInstance(nullptr), FurnitureActor(nullptr), FurnitureHeight(0.0f) {}
 };
 
 UCLASS(Blueprintable, BlueprintType)
@@ -68,6 +81,26 @@ public:
     
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fire Grid Config")
   UMaterialInterface* CharDecalMaterial;
+
+  // --- Enveloping fire config ---
+  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fire Grid Config", meta = (ClampMin = "1", ClampMax = "10"))
+  int32 NumEnvelopLayers;
+
+  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fire Grid Config", meta = (ClampMin = "0.1", ClampMax = "5.0"))
+  float EnvelopFireScale;
+
+  // --- Heat transfer tuning ---
+  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fire Grid Config", meta = (ClampMin = "0.001", ClampMax = "0.1"))
+  float ConductionCoefficient;
+
+  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fire Grid Config", meta = (ClampMin = "0.01", ClampMax = "0.5"))
+  float RadiativeCoefficient;
+
+  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fire Grid Config", meta = (ClampMin = "10.0", ClampMax = "500.0"))
+  float BurnTemperatureRamp;
+
+  UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fire Grid Config", meta = (ClampMin = "0.1", ClampMax = "2.0"))
+  float FireTimeScale;
 
   UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Fire Grid Config")
   TArray<FFireCell> GridCells;
